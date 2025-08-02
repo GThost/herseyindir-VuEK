@@ -3,4 +3,192 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>🎬 Her şeyi İndir
+  <title>🎬 Her Şeyi İndir!</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet"/>
+  <style> body { font-family: 'Inter', sans-serif; } </style>
+</head>
+<body class="bg-gray-900 text-white min-h-screen flex flex-col items-center justify-center p-4">
+
+  <div class="bg-gray-800 p-8 rounded-xl shadow-lg w-full max-w-md">
+    <h1 class="text-3xl font-bold text-center text-green-400 mb-6">🎬 Video İndirici</h1>
+
+    <!-- Video URL -->
+    <div class="mb-4">
+      <label for="videoUrl" class="block text-sm font-medium text-gray-400 mb-1">Video URL'si</label>
+      <input id="videoUrl" type="text" placeholder="Video bağlantısını girin"
+        class="w-full p-3 bg-gray-700 border border-gray-600 rounded-lg text-white placeholder-gray-400"/>
+    </div>
+
+    <!-- Butonlar -->
+    <div class="flex gap-4 mb-4">
+      <button id="mp4button" onclick="indirMP4()" 
+        class="flex-1 bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-4 rounded-lg shadow-md transition transform hover:scale-105">
+        🎬 Mp4 Video İndir
+      </button>
+
+      <button onclick="getFormats()"
+        class="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-lg shadow-md transition transform hover:scale-105">
+        🎵 Mp3 Müzik İndir
+      </button>
+    </div>
+
+    <div id="formatlar" class="space-y-2"></div>
+    <div id="durum" class="mt-4 text-center font-semibold text-sm"></div>
+  </div>
+
+  <script>
+    const BASE_URL = "https://web-production-316d2.up.railway.app"; // BURAYI Railway URL'inle değiştir
+
+    async function indirMP4() {
+      const videoUrlInput = document.getElementById("videoUrl");
+      const durumDiv = document.getElementById("durum");
+      const indirBtn = document.getElementById("mp4button");
+
+      const videoUrl = videoUrlInput.value.trim();
+      if (!videoUrl) {
+        durumDiv.textContent = "❗ Lütfen geçerli bir video URL'si girin.";
+        durumDiv.className = "mt-4 text-center font-semibold text-red-400";
+        return;
+      }
+
+      // Yüzde simülasyonu
+      let progress = 0;
+      const timer = setInterval(() => {
+        progress++;
+        durumDiv.textContent = `⏳ Video indiriliyor... (%${progress})`;
+        if (progress >= 100) {
+          clearInterval(timer);
+          durumDiv.textContent = "✅ Dosya başarıyla indirildi.";
+          durumDiv.className = "mt-4 text-center font-semibold text-green-400";
+        }
+      }, 100);
+
+      indirBtn.disabled = true;
+      indirBtn.textContent = "İndiriliyor...";
+
+      try {
+        const response = await fetch(`${BASE_URL}/indir`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url: videoUrl })
+        });
+
+        if (!response.ok) throw new Error("Sunucu hatası");
+
+        const blob = await response.blob();
+        const blobUrl = window.URL.createObjectURL(blob);
+
+        const a = document.createElement("a");
+        a.href = blobUrl;
+        a.download = ""; // otomatik başlar
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        window.URL.revokeObjectURL(blobUrl);
+
+      } catch (err) {
+        clearInterval(timer);
+        durumDiv.textContent = "❌ Hata: " + err.message;
+        durumDiv.className = "mt-4 text-center font-semibold text-red-400";
+      } finally {
+        indirBtn.disabled = false;
+        indirBtn.textContent = "🎬 Mp4 Video İndir";
+      }
+    }
+
+    async function getFormats() {
+      const url = document.getElementById("videoUrl").value;
+      const formatlar = document.getElementById("formatlar");
+      const durum = document.getElementById("durum");
+
+      formatlar.innerHTML = "";
+      durum.textContent = "🎵 Formatlar aranıyor...";
+
+      const res = await fetch(`${BASE_URL}/ses-formatlari`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url })
+      });
+
+      const data = await res.json();
+      if (!data.formats) {
+        durum.textContent = "❌ Ses formatı bulunamadı.";
+        return;
+      }
+
+      durum.textContent = "🎧 MP3 formatı seçin:";
+      data.formats.forEach(f => {
+        const btn = document.createElement("button");
+        btn.className = "block w-full bg-blue-500 hover:bg-blue-600 py-2 rounded text-white font-semibold";
+        btn.textContent = f.abr ? `${f.abr} kbps` : "Bilinmeyen kalite";
+        btn.onclick = () => indirMP3(f.format_id, f.title);
+        formatlar.appendChild(btn);
+      });
+    }
+
+    async function getFormats() {
+    const url = document.getElementById("videoUrl").value;
+    const formatlar = document.getElementById("formatlar");
+    const durum = document.getElementById("durum");
+
+    formatlar.innerHTML = "";
+    durum.textContent = "🎵 Formatlar aranıyor...";
+
+    const res = await fetch(`${BASE_URL}/ses-formatlari`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url })
+    });
+
+    const data = await res.json();
+    if (!data.formats) {
+      durum.textContent = "❌ Ses formatı bulunamadı.";
+      return;
+    }
+
+    durum.textContent = "🎧 MP3 formatı seçin:";
+    data.formats.forEach(f => {
+      const btn = document.createElement("button");
+      btn.className = "block w-full bg-blue-500 hover:bg-blue-600 py-2 rounded text-white font-semibold";
+      btn.textContent = f.abr ? `${f.abr} kbps` : "Bilinmeyen kalite";
+      btn.onclick = () => indirMP3(f.format_id, f.title);
+      formatlar.appendChild(btn);
+    });
+  }
+
+  async function indirMP3(formatId, title) {
+    const url = document.getElementById("videoUrl").value;
+    const durum = document.getElementById("durum");
+
+    durum.textContent = "🎶 MP3'e dönüştürülüyor...";
+
+    const response = await fetch(`${BASE_URL}/indir-mp3`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url, format_id: formatId, title })
+    });
+
+    if (!response.ok) {
+      durum.textContent = "❌ MP3 indirilemedi.";
+      return;
+    }
+
+    const blob = await response.blob();
+    const blobUrl = window.URL.createObjectURL(blob);
+    const safeTitle = title.replace(/[\\/:*?"<>|]/g, "").trim();
+
+    const a = document.createElement("a");
+    a.href = blobUrl;
+    a.download = ""; // farklı kaydet açmak için boş bırakıldı
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.URL.revokeObjectURL(blobUrl);
+
+    durum.textContent = "✅ Müzik başarıyla indirildi.";
+    document.getElementById("formatlar").innerHTML = "";
+  }
+</script>
+</body>
+</html>
