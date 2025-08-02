@@ -10,14 +10,9 @@ CORS(app)
 DOWNLOADS = "downloads"
 os.makedirs(DOWNLOADS, exist_ok=True)
 
-# Railway'de ffmpeg global kurulu, bu satıra gerek yok:
-FFMPEG_PATH = "ffmpeg"  # Gerekirse elle güncellenebilir
-
-
 @app.route("/")
 def home():
     return "✅ API aktif. Her şeyi İndir servisi çalışıyor."
-
 
 @app.route("/indir", methods=["POST"])
 def indir():
@@ -34,11 +29,11 @@ def indir():
             outpath = os.path.join(DOWNLOADS, filename)
 
         ydl_opts = {
-            "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best",
+            "format": "bestvideo+bestaudio/best",
             "merge_output_format": "mp4",
             "outtmpl": outpath,
             "quiet": True,
-            "ffmpeg_location": FFMPEG_PATH
+            "nocheckcertificate": True
         }
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -47,7 +42,6 @@ def indir():
         return send_file(outpath, as_attachment=False)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
 
 @app.route("/ses-formatlari", methods=["POST"])
 def ses_formatlari():
@@ -73,7 +67,6 @@ def ses_formatlari():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-
 @app.route("/indir-mp3", methods=["POST"])
 def indir_mp3():
     url = request.json.get("url")
@@ -90,20 +83,19 @@ def indir_mp3():
     ydl_opts = {
         "format": format_id,
         "outtmpl": webm_path,
-        "quiet": True,
-        "ffmpeg_location": FFMPEG_PATH
+        "quiet": True
     }
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
-        os.system(f'{FFMPEG_PATH} -i "{webm_path}" -vn -ab 192k "{mp3_path}"')
+
+        os.system(f'ffmpeg -i "{webm_path}" -vn -ab 192k "{mp3_path}"')
+
         return send_file(mp3_path, as_attachment=False)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-
-# Railway port ayarı:
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
