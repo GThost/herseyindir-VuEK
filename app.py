@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, send_file
+from flask import Flask, request, jsonify, send_file, render_template
 import yt_dlp
 import os
 import uuid
@@ -12,7 +12,7 @@ os.makedirs(DOWNLOADS, exist_ok=True)
 
 @app.route("/")
 def home():
-    return "✅ API aktif. Her şeyi İndir servisi çalışıyor."
+    return render_template("index.html")
 
 @app.route("/indir", methods=["POST"])
 def indir():
