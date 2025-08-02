@@ -9,12 +9,14 @@ CORS(app)
 
 DOWNLOADS = "downloads"
 os.makedirs(DOWNLOADS, exist_ok=True)
-FFMPEG_PATH = r'C:\herseyindir_final\ffmpeg\bin\ffmpeg.exe'
+
+# Railway'de ffmpeg global kurulu, bu satıra gerek yok:
+FFMPEG_PATH = "ffmpeg"  # Gerekirse elle güncellenebilir
 
 
 @app.route("/")
 def home():
-    return "API aktif."
+    return "✅ API aktif. Her şeyi İndir servisi çalışıyor."
 
 
 @app.route("/indir", methods=["POST"])
@@ -24,7 +26,6 @@ def indir():
         return jsonify({"error": "URL eksik"}), 400
 
     try:
-        # Başlığı al ve dosya adını oluştur
         with yt_dlp.YoutubeDL({'quiet': True}) as ydl:
             info = ydl.extract_info(url, download=False)
             title = info.get("title", str(uuid.uuid4()))
@@ -66,7 +67,7 @@ def ses_formatlari():
                     sesler.append({
                         "format_id": f["format_id"],
                         "abr": int(abr) if abr else None,
-                        "title": title  # Her format için title dahil ediliyor
+                        "title": title
                     })
             return jsonify({"formats": sesler})
     except Exception as e:
@@ -82,7 +83,6 @@ def indir_mp3():
     if not url or not format_id:
         return jsonify({"error": "Eksik bilgi"}), 400
 
-    # Güvenli dosya adı oluştur
     safe_title = "".join(c for c in title if c.isalnum() or c in (" ", "-", "_")).rstrip()
     webm_path = os.path.join(DOWNLOADS, f"{uuid.uuid4()}.webm")
     mp3_path = os.path.join(DOWNLOADS, f"{safe_title}.mp3")
@@ -91,17 +91,19 @@ def indir_mp3():
         "format": format_id,
         "outtmpl": webm_path,
         "quiet": True,
-        "ffmpeg_location": FFMPEG_PATH,
+        "ffmpeg_location": FFMPEG_PATH
     }
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
-        os.system(f'"{FFMPEG_PATH}" -i "{webm_path}" -vn -ab 192k "{mp3_path}"')
+        os.system(f'{FFMPEG_PATH} -i "{webm_path}" -vn -ab 192k "{mp3_path}"')
         return send_file(mp3_path, as_attachment=False)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 
+# Railway port ayarı:
 if __name__ == "__main__":
-    app.run(port=10000)
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
