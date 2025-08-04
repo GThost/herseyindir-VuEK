@@ -40,6 +40,13 @@ def indir():
             ydl.download([url])
 
         return send_file(outpath, as_attachment=False)
+
+    except yt_dlp.utils.DownloadError as e:
+        if "Sign in to confirm your age" in str(e):
+            return jsonify({"error": "Bu video YouTube tarafından yaş sınırlaması ile korunuyor. İndirme için oturum gerekli olduğu için desteklenmemektedir."}), 403
+        else:
+            return jsonify({"error": str(e)}), 500
+
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
