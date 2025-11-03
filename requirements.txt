@@ -1,4 +1,4 @@
 flask
-flask_cors
-yt-dlp
-ffmpeg-python
+flask-cors
+yt-dlp>=2025.01.01
+gunicorn
