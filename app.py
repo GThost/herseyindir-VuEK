@@ -1,98 +1,146 @@
 from flask import Flask, request, jsonify, send_file, render_template
-import yt_dlp
-import os
-import uuid
 from flask_cors import CORS
+import yt_dlp
+import os, uuid, time, glob
 
 app = Flask(__name__)
 CORS(app)
 
-DOWNLOADS = "downloads"
-os.makedirs(DOWNLOADS, exist_ok=True)
+# Railway'de güvenli yazma alanı
+TMPDIR = "/tmp/kgdl"
+os.makedirs(TMPDIR, exist_ok=True)
 
 @app.route("/")
 def home():
-    return render_template("index.html")
+    # index.html yoksa 200 dönmek için basit cevap
+    try:
+        return render_template("index.html")
+    except Exception:
+        return "KATAR GLOBAL Downloader", 200
+
+def _safe_title(t):
+    t = t or str(uuid.uuid4())
+    return "".join(c for c in t if c.isalnum() or c in (" ", "-", "_")).rstrip()
+
+def _common_ydl_opts(outtmpl_base):
+    return {
+        # En stabil YouTube istemcileri
+        "extractor_args": {"youtube": {"player_client": ["android","web"]}},
+        "noplaylist": True,
+        "quiet": True,
+        "concurrent_fragment_downloads": 1,
+        "outtmpl": outtmpl_base,  # base + ".%(ext)s"
+        # ağ sorunlarında tekrar dene (çok abartmadan)
+        "retries": 3,
+        "fragment_retries": 3,
+        "nocheckcertificate": True,
+    }
 
 @app.route("/indir", methods=["POST"])
 def indir():
-    url = request.json.get("url")
+    data = request.get_json(silent=True) or {}
+    url = (data.get("url") or "").strip()
     if not url:
         return jsonify({"error": "URL eksik"}), 400
 
+    stamp = int(time.time()*1000)
+    base = os.path.join(TMPDIR, f"kg_{stamp}")
+    outtmpl = base + ".%(ext)s"
+
+    ydl_opts = _common_ydl_opts(outtmpl)
+    # En iyi birleşik akış yoksa ayrı akış indir, mp4 birleştir
+    ydl_opts.update({
+        "format": "bv*+ba/best",
+        "merge_output_format": "mp4",
+    })
+
     try:
-        with yt_dlp.YoutubeDL({'quiet': True}) as ydl:
-            info = ydl.extract_info(url, download=False)
-            title = info.get("title", str(uuid.uuid4()))
-            safe_title = "".join(c for c in title if c.isalnum() or c in (" ", "-", "_")).rstrip()
-            filename = f"{safe_title}.mp4"
-            outpath = os.path.join(DOWNLOADS, filename)
-
-        ydl_opts = {
-            "format": "bestvideo+bestaudio/best",
-            "merge_output_format": "mp4",
-            "outtmpl": outpath,
-            "quiet": True,
-            "nocheckcertificate": True
-        }
-
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([url])
+            info = ydl.extract_info(url, download=True)
+            title = _safe_title(info.get("title"))
+        # oluşan dosyayı bul (mp4 öncelikli)
+        cand = sorted(glob.glob(base + ".*"), key=os.path.getmtime)
+        if not cand:
+            return jsonify({"error": "Çıktı dosyası bulunamadı"}), 500
+        # mp4 varsa onu, yoksa en yenisini gönder
+        mp4s = [p for p in cand if p.lower().endswith(".mp4")]
+        outpath = (mp4s[-1] if mp4s else cand[-1])
 
-        return send_file(outpath, as_attachment=False)
+        # indir olarak başlasın istiyorsan as_attachment=True yap
+        return send_file(outpath, as_attachment=False,
+                         download_name=f"{title}.mp4")
+    except yt_dlp.utils.DownloadError as e:
+        s = str(e)
+        if "Sign in to confirm your age" in s or "age" in s.lower():
+            return jsonify({"error": "Video 18+ yaş doğrulaması istiyor, sunucudan indirilemez."}), 403
+        if "Private" in s or "copyright" in s.lower():
+            return jsonify({"error": "Video erişime kapalı veya telif korumalı."}), 403
+        return jsonify({"error": s}), 400
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 @app.route("/ses-formatlari", methods=["POST"])
 def ses_formatlari():
-    url = request.json.get("url")
+    data = request.json or {}
+    url = (data.get("url") or "").strip()
+    if not url:
+        return jsonify({"error": "URL eksik"}), 400
     try:
-        with yt_dlp.YoutubeDL({'quiet': True}) as ydl:
+        with yt_dlp.YoutubeDL({"quiet": True, "noplaylist": True}) as ydl:
             info = ydl.extract_info(url, download=False)
-            title = info.get("title", "ses")
-            sesler = []
-            for f in info.get("formats", []):
-                if (
-                    f.get("vcodec") == "none" and
-                    f.get("ext") == "webm" and
-                    f.get("acodec") != "none"
-                ):
-                    abr = f.get("abr", 0)
-                    sesler.append({
-                        "format_id": f["format_id"],
-                        "abr": int(abr) if abr else None,
-                        "title": title
-                    })
-            return jsonify({"formats": sesler})
+        title = info.get("title", "audio")
+        sesler = []
+        for f in info.get("formats", []):
+            if f.get("vcodec") == "none" and f.get("acodec") != "none":
+                sesler.append({
+                    "format_id": f["format_id"],
+                    "abr": int(f.get("abr", 0) or 0) or None,
+                    "ext": f.get("ext"),
+                    "title": title
+                })
+        # yüksek bitrate'leri üste koy
+        sesler.sort(key=lambda x: (x["abr"] or 0), reverse=True)
+        return jsonify({"formats": sesler})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 @app.route("/indir-mp3", methods=["POST"])
 def indir_mp3():
-    url = request.json.get("url")
-    format_id = request.json.get("format_id")
-    title = request.json.get("title", "indirilen")
+    data = request.json or {}
+    url = (data.get("url") or "").strip()
+    format_id = data.get("format_id")
+    title = _safe_title(data.get("title", "audio"))
 
     if not url or not format_id:
         return jsonify({"error": "Eksik bilgi"}), 400
 
-    safe_title = "".join(c for c in title if c.isalnum() or c in (" ", "-", "_")).rstrip()
-    webm_path = os.path.join(DOWNLOADS, f"{uuid.uuid4()}.webm")
-    mp3_path = os.path.join(DOWNLOADS, f"{safe_title}.mp3")
+    stamp = int(time.time()*1000)
+    base = os.path.join(TMPDIR, f"kg_{stamp}")
+    outtmpl = base + ".%(ext)s"
 
-    ydl_opts = {
-        "format": format_id,
-        "outtmpl": webm_path,
-        "quiet": True
-    }
+    ydl_opts = _common_ydl_opts(outtmpl)
+    ydl_opts.update({
+        "format": str(format_id),
+        "postprocessors": [{
+            "key": "FFmpegExtractAudio",
+            "preferredcodec": "mp3",
+            "preferredquality": "0"  # en yüksek
+        }],
+    })
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
 
-        os.system(f'ffmpeg -i "{webm_path}" -vn -ab 192k "{mp3_path}"')
-
-        return send_file(mp3_path, as_attachment=False)
+        # mp3 dosyasını bul
+        mp3s = sorted(glob.glob(base + ".mp3"), key=os.path.getmtime)
+        if not mp3s:
+            return jsonify({"error": "MP3 oluşturulamadı (FFmpeg var mı?)."}), 500
+        mp3_path = mp3s[-1]
+        return send_file(mp3_path, as_attachment=False,
+                         download_name=f"{title}.mp3")
+    except yt_dlp.utils.DownloadError as e:
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
