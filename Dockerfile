@@ -1,16 +1,18 @@
-FROM python:3.10-slim
+# Dockerfile
+FROM python:3.11-slim
 
-# ffmpeg kurulumu
-RUN apt update && apt install -y ffmpeg
+# FFmpeg lazım (mp3 ve video merge için)
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ffmpeg \
+ && rm -rf /var/lib/apt/lists/*
 
-# çalışma klasörü
 WORKDIR /app
 
-# dosyaları kopyala
-COPY . /app
+COPY requirements.txt .
+RUN pip install -U pip && pip install -r requirements.txt
 
-# bağımlılıkları yükle
-RUN pip install -r requirements.txt
+COPY . .
 
-# uygulamayı başlat
-CMD ["python", "app.py"]
+# Railway genelde PORT verir ama 8080 güvenli
+ENV PORT=8080
+CMD ["gunicorn", "-w", "2", "-b", "0.0.0.0:8080", "app:app"]
