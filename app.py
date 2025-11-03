@@ -1,12 +1,20 @@
 from flask import Flask, request, jsonify, send_file, render_template
 from flask_cors import CORS
 import yt_dlp
-import os, uuid, time, glob
+import os, uuid, time, glob, subprocess, sys
 
 app = Flask(__name__)
 CORS(app)
 
-# Sağlık testi için
+# --- Başlangıç teşhis logları (FFmpeg ve yt-dlp versiyonları) ---
+print("yt-dlp version:", getattr(yt_dlp, "version", None) and yt_dlp.version.__version__, flush=True)
+try:
+    ff_out = subprocess.check_output(["ffmpeg", "-version"]).decode().splitlines()[0]
+    print(ff_out, flush=True)  # örn: "ffmpeg version 6.1 ..."
+except Exception as e:
+    print("FFmpeg NOT FOUND:", e, flush=True)
+
+# Sağlık testi
 @app.route("/ping")
 def ping():
     return "pong", 200
@@ -17,6 +25,7 @@ os.makedirs(TMPDIR, exist_ok=True)
 
 @app.route("/")
 def home():
+    # index.html yoksa 200 dönmek için basit cevap
     try:
         return render_template("index.html")
     except Exception:
@@ -28,47 +37,68 @@ def _safe_title(t):
 
 def _common_ydl_opts(outtmpl_base):
     return {
-        "extractor_args": {"youtube": {"player_client": ["android","web"]}},
+        # Daha stabil client seçimi
+        "extractor_args": {"youtube": {"player_client": ["android", "web"]}},
         "noplaylist": True,
         "quiet": True,
         "concurrent_fragment_downloads": 1,
-        "outtmpl": outtmpl_base,
+        "outtmpl": outtmpl_base,  # base + ".%(ext)s"
         "retries": 3,
         "fragment_retries": 3,
         "nocheckcertificate": True,
     }
 
+def _ffmpeg_available():
+    try:
+        subprocess.check_output(["ffmpeg", "-version"])
+        return True
+    except Exception:
+        return False
+
+def _get_url_from_request():
+    # JSON gövdesi varsa
+    if request.is_json:
+        data = request.get_json(silent=True) or {}
+        u = (data.get("url") or "").strip()
+        if u:
+            return u
+    # Form veya query string'ten dene
+    return (request.form.get("url") or request.args.get("url") or "").strip()
+
 @app.route("/indir", methods=["POST"])
 def indir():
-    print("POST /indir", request.json, flush=True)  # ✅ Log için eklendi
+    print("POST /indir", request.json if request.is_json else dict(request.form), flush=True)
 
-    data = request.get_json(silent=True) or {}
-    url = (data.get("url") or "").strip()
+    url = _get_url_from_request()
     if not url:
         return jsonify({"error": "URL eksik"}), 400
 
-    stamp = int(time.time()*1000)
+    stamp = int(time.time() * 1000)
     base = os.path.join(TMPDIR, f"kg_{stamp}")
     outtmpl = base + ".%(ext)s"
 
     ydl_opts = _common_ydl_opts(outtmpl)
+    # En iyi birleşik akış yoksa ayrı akış indir, mp4 birleştir
     ydl_opts.update({
         "format": "bv*+ba/best",
         "merge_output_format": "mp4",
+        "prefer_ffmpeg": True,
     })
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
             title = _safe_title(info.get("title"))
+
+        # Çıktıyı bul (mp4 öncelikli)
         cand = sorted(glob.glob(base + ".*"), key=os.path.getmtime)
         if not cand:
             return jsonify({"error": "Çıktı dosyası bulunamadı"}), 500
         mp4s = [p for p in cand if p.lower().endswith(".mp4")]
         outpath = (mp4s[-1] if mp4s else cand[-1])
 
-        return send_file(outpath, as_attachment=False,
-                         download_name=f"{title}.mp4")
+        # as_attachment=True yaparsan tarayıcı direkt indirir
+        return send_file(outpath, as_attachment=False, download_name=f"{title}.mp4")
     except yt_dlp.utils.DownloadError as e:
         s = str(e)
         if "Sign in to confirm your age" in s or "age" in s.lower():
@@ -81,10 +111,9 @@ def indir():
 
 @app.route("/ses-formatlari", methods=["POST"])
 def ses_formatlari():
-    print("POST /ses-formatlari", request.json, flush=True)  # ✅ Log
+    print("POST /ses-formatlari", request.json if request.is_json else dict(request.form), flush=True)
 
-    data = request.json or {}
-    url = (data.get("url") or "").strip()
+    url = _get_url_from_request()
     if not url:
         return jsonify({"error": "URL eksik"}), 400
     try:
@@ -107,27 +136,38 @@ def ses_formatlari():
 
 @app.route("/indir-mp3", methods=["POST"])
 def indir_mp3():
-    print("POST /indir-mp3", request.json, flush=True)  # ✅ Log
+    print("POST /indir-mp3", request.json if request.is_json else dict(request.form), flush=True)
 
-    data = request.json or {}
-    url = (data.get("url") or "").strip()
-    format_id = data.get("format_id")
-    title = _safe_title(data.get("title", "audio"))
+    # FFmpeg yoksa doğrudan net hata dön
+    if not _ffmpeg_available():
+        return jsonify({"error": "FFmpeg bulunamadı. Sunucuda MP3 dönüştürme yapılamaz."}), 500
+
+    # URL/format_id hem JSON hem form-data’dan okunabilir
+    url = _get_url_from_request()
+    format_id = None
+    if request.is_json:
+        body = request.get_json(silent=True) or {}
+        format_id = body.get("format_id")
+        title = _safe_title(body.get("title", "audio"))
+    else:
+        format_id = request.form.get("format_id")
+        title = _safe_title(request.form.get("title", "audio"))
 
     if not url or not format_id:
         return jsonify({"error": "Eksik bilgi"}), 400
 
-    stamp = int(time.time()*1000)
+    stamp = int(time.time() * 1000)
     base = os.path.join(TMPDIR, f"kg_{stamp}")
     outtmpl = base + ".%(ext)s"
 
     ydl_opts = _common_ydl_opts(outtmpl)
     ydl_opts.update({
-        "format": str(format_id),
+        "format": str(format_id),        # seçilen ses formatı (ör: 251)
+        "prefer_ffmpeg": True,           # ffmpeg’i tercih et
         "postprocessors": [{
             "key": "FFmpegExtractAudio",
             "preferredcodec": "mp3",
-            "preferredquality": "0"
+            "preferredquality": "0"     # en yüksek kalite
         }],
     })
 
@@ -135,12 +175,18 @@ def indir_mp3():
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
 
-        mp3s = sorted(glob.glob(base + ".mp3"), key=os.path.getmtime)
-        if not mp3s:
-            return jsonify({"error": "MP3 oluşturulamadı (FFmpeg var mı?)."}), 500
-        mp3_path = mp3s[-1]
-        return send_file(mp3_path, as_attachment=False,
-                         download_name=f"{title}.mp3")
+        # mp3 dosyasını bul
+        mp3_path = base + ".mp3"
+        if not os.path.exists(mp3_path):
+            mp3s = sorted(
+                glob.glob(base + ".mp3") + glob.glob(base + "*.mp3"),
+                key=os.path.getmtime
+            )
+            if not mp3s:
+                return jsonify({"error": "MP3 oluşturulamadı (FFmpeg veya postprocessor)."}), 500
+            mp3_path = mp3s[-1]
+
+        return send_file(mp3_path, as_attachment=False, download_name=f"{title}.mp3")
     except yt_dlp.utils.DownloadError as e:
         return jsonify({"error": str(e)}), 400
     except Exception as e:
